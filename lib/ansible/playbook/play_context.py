@@ -43,6 +43,7 @@ TASK_ATTRIBUTE_OVERRIDES = (
     'delegate_to',
     'no_log',
     'remote_user',
+    'chroot_dir',
 )
 
 RESET_VARS = (

@@ -750,6 +750,8 @@ class Base(FieldAttributeBase):
     become_flags = FieldAttribute(isa='string', default=context.cliargs_deferred_get('become_flags'))
     become_exe = FieldAttribute(isa='string', default=context.cliargs_deferred_get('become_exe'))
 
+    chroot_dir = FieldAttribute(isa="string", default=context.cliargs_deferred_get("chroot_dir"))
+
     # used to hold sudo/su stuff
     DEPRECATED_ATTRIBUTES = []  # type: list[str]
 
