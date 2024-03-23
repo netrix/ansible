@@ -473,6 +473,11 @@ class ActionBase(ABC):
             tmpdir = self._remote_expand_user(self.get_shell_option('remote_tmp', default='~/.ansible/tmp'), sudoable=False)
 
         become_unprivileged = self._is_become_unprivileged()
+        
+        chroot_dir = self._connection.chroot_dir
+        if chroot_dir is not None:
+            tmpdir = chroot_dir + tmpdir
+
         basefile = self._connection._shell._generate_temp_dir_name()
         cmd = self._connection._shell.mkdtemp(basefile=basefile, system=become_unprivileged, tmpdir=tmpdir)
         result = self._low_level_execute_command(cmd, sudoable=False)
@@ -1011,6 +1016,7 @@ class ActionBase(ABC):
                             ' if they are responsible for removing it.')
         del delete_remote_tmp  # No longer used
 
+        chroot_dir = self._connection.chroot_dir or ""
         tmpdir = self._connection._shell.tmpdir
 
         # We set the module_style to new here so the remote_tmp is created
@@ -1049,26 +1055,28 @@ class ActionBase(ABC):
         self._used_interpreter = shebang
         remote_module_path = None
 
+        chroot_tmpdir = tmpdir.replace(chroot_dir, "") if tmpdir is not None else None
         if not self._is_pipelining_enabled(module_style, wrap_async):
             # we might need remote tmp dir
             if tmpdir is None:
                 self._make_tmp_path()
                 tmpdir = self._connection._shell.tmpdir
+                chroot_tmpdir = tmpdir.replace(chroot_dir, "")
 
             remote_module_filename = self._connection._shell.get_remote_filename(module_path)
-            remote_module_path = self._connection._shell.join_path(tmpdir, 'AnsiballZ_%s' % remote_module_filename)
+            remote_module_path = self._connection._shell.join_path(chroot_tmpdir, 'AnsiballZ_%s' % remote_module_filename)
 
         args_file_path = None
         if module_style in ('old', 'non_native_want_json', 'binary'):
             # we'll also need a tmp file to hold our module arguments
-            args_file_path = self._connection._shell.join_path(tmpdir, 'args')
+            args_file_path = self._connection._shell.join_path(chroot_tmpdir, 'args')
 
         if remote_module_path or module_style != 'new':
-            display.debug("transferring module to remote %s" % remote_module_path)
+            final_remote_module_path = self._connection.chroot_dir + remote_module_path if self._connection.chroot_dir is not None else remote_module_path
             if module_style == 'binary':
-                self._transfer_file(module_path, remote_module_path)
+                self._transfer_file(module_path, final_remote_module_path)
             else:
-                self._transfer_data(remote_module_path, module_data)
+                self._transfer_data(final_remote_module_path, module_data)
             if module_style == 'old':
                 # we need to dump the module args to a k=v string in a file on
                 # the remote system, which can be read and parsed by the module
@@ -1088,8 +1096,8 @@ class ActionBase(ABC):
             del self._task.environment[remove_async_dir]
 
         remote_files = []
-        if tmpdir and remote_module_path:
-            remote_files = [tmpdir, remote_module_path]
+        if chroot_tmpdir and remote_module_path:
+            remote_files = [chroot_tmpdir, remote_module_path]
 
         if args_file_path:
             remote_files.append(args_file_path)
@@ -1103,7 +1111,7 @@ class ActionBase(ABC):
             (async_module_style, shebang, async_module_data, async_module_path) = self._configure_module(
                 module_name='ansible.legacy.async_wrapper', module_args=dict(), task_vars=task_vars)
             async_module_remote_filename = self._connection._shell.get_remote_filename(async_module_path)
-            remote_async_module_path = self._connection._shell.join_path(tmpdir, async_module_remote_filename)
+            remote_async_module_path = self._connection._shell.join_path(chroot_tmpdir, async_module_remote_filename)
             self._transfer_data(remote_async_module_path, async_module_data)
             remote_files.append(remote_async_module_path)
 
@@ -1143,11 +1151,14 @@ class ActionBase(ABC):
         # files have been transferred.
         if remote_files:
             # remove none/empty
-            remote_files = [x for x in remote_files if x]
+            def _fix_chroot_path(remote_module_path):
+                return self._connection.chroot_dir + remote_module_path if self._connection.chroot_dir is not None else remote_module_path
+
+            remote_files = [_fix_chroot_path(x) for x in remote_files if x]
             self._fixup_perms2(remote_files, self._get_remote_user())
 
         # actually execute
-        res = self._low_level_execute_command(cmd, sudoable=sudoable, in_data=in_data)
+        res = self._low_level_execute_command(cmd, sudoable=sudoable, in_data=in_data, chroot_dir=self._connection.chroot_dir)
 
         # parse the main result
         data = self._parse_returned_data(res)
@@ -1259,7 +1270,7 @@ class ActionBase(ABC):
         return data
 
     # FIXME: move to connection base
-    def _low_level_execute_command(self, cmd, sudoable=True, in_data=None, executable=None, encoding_errors='surrogate_then_replace', chdir=None):
+    def _low_level_execute_command(self, cmd, sudoable=True, in_data=None, executable=None, encoding_errors='surrogate_then_replace', chdir=None, chroot_dir=None):
         '''
         This is the function which executes the low level shell command, which
         may be commands to create/remove directories for temporary files, or to
@@ -1307,6 +1318,10 @@ class ActionBase(ABC):
                 cmd = executable + ' -c ' + shlex.quote(cmd)
 
         display.debug("_low_level_execute_command(): executing: %s" % (cmd,))
+
+        if chroot_dir is not None:
+            # TODO typical chroot
+            cmd = "chroot " + chroot_dir + " " + cmd
 
         # Change directory to basedir of task for command execution when connection is local
         if self._connection.transport == 'local':

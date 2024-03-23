@@ -105,6 +105,7 @@ class ConnectionBase(AnsiblePlugin):
             self._shell = get_shell_plugin(shell_type=shell_type, executable=self._play_context.executable)
 
         self.become: BecomeBase | None = None
+        self.chroot_dir = play_context.chroot_dir
 
     @property
     def _new_stdin(self) -> io.TextIOWrapper | None:
